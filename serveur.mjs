@@ -160,7 +160,7 @@ const h = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;
 /* Tests exclus du tableau (Gauthier, 23/11 12h46 : « la vente vient de moi ») : adresses de la maison et sessions
    ouvertes avant la mise en vente réelle (essais du 23/11 au matin). */
 const INTERNES = /@(grapperagency\.com|talza\.io)$/i;
-const DEBUT_REEL = Date.parse(E.DEBUT_REEL || "2026-11-23T11:00:00+01:00") / 1000;
+const DEBUT_REEL = Date.parse(E.DEBUT_REEL || "2026-11-23T20:50:00+01:00") / 1000;
 const estTest = (x) => INTERNES.test(x.customer_details?.email || x.customer_email || "") || x.created < DEBUT_REEL;
 async function tableau(res) {
   const toutes = await sessionsDepuis(Math.floor(DEBUT_LANCEMENT / 1000));
