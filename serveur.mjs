@@ -89,6 +89,41 @@ function autorise(req) {
   const attendu = Buffer.from(mdp);
   return recu.length === attendu.length && crypto.timingSafeEqual(recu, attendu);
 }
+/* Chiffres de prospection poussés par l'outil du Mac mini toutes les 10 minutes (compteurs seulement, aucun nom).
+   Gardés en mémoire : après un redémarrage, le prochain envoi du Mac les remet. */
+let prospection = null;
+function cleProspectionOk(req) {
+  const cle = E.PROSPECTION_CLE || "";
+  const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
+  if (cle.length < 32 || !m) return false;
+  const a = Buffer.from(m[1]), b = Buffer.from(cle);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+async function recevoirProspection(req, res) {
+  if (!cleProspectionOk(req)) { res.writeHead(401); return res.end(); }
+  let corps = "";
+  for await (const morceau of req) { corps += morceau; if (corps.length > 50_000) { res.writeHead(413); return res.end(); } }
+  const d = JSON.parse(corps);
+  const n = (v) => Number.isFinite(+v) && +v >= 0 ? Math.floor(+v) : 0;
+  const parJour = {};
+  for (const [j, v] of Object.entries(d.par_jour || {})) if (/^\d{4}-\d{2}-\d{2}$/.test(j)) parJour[j] = { mails1: n(v.mails1), relances: n(v.relances), reponses: n(v.reponses), rebonds: n(v.rebonds) };
+  prospection = { recu: new Date().toISOString(), profils_trouves: n(d.profils_trouves), en_file: n(d.en_file), mails1: n(d.mails1), relances: n(d.relances),
+    reponses: n(d.reponses), reponses_apres_relance: n(d.reponses_apres_relance), rebonds: n(d.rebonds), ecartes: n(d.ecartes), sans_reponse: n(d.sans_reponse), par_jour: parJour };
+  res.writeHead(204); res.end();
+}
+function sectionProspection() {
+  const p = prospection;
+  if (!p) return '<h2>Prospection</h2><p class="s">Pas encore de chiffres : l\'outil du Mac mini les envoie toutes les 10 minutes.</p>';
+  const pc = (a, b) => b ? Math.round(a * 100 / b) + " %" : "—";
+  const carte = (v, t) => `<div class="carte"><b>${v}</b><span>${t}</span></div>`;
+  const jours = Object.keys(p.par_jour).sort().reverse();
+  const lignes = jours.map((j) => { const d = p.par_jour[j]; return `<tr><td>${h(j)}</td><td class="n">${d.mails1}</td><td class="n">${d.relances}</td><td class="n">${d.mails1 + d.relances}</td><td class="n">${d.reponses}</td><td class="n">${d.rebonds}</td></tr>`; }).join("");
+  return `<h2>Prospection</h2><p class="s">Chiffres de l'outil d'envoi (mis à jour ${h(new Date(p.recu).toLocaleString("fr-FR", { timeZone: ZONE, timeStyle: "short", dateStyle: "short" }))}).</p>
+<div class="cartes">${carte(p.profils_trouves, "profils trouvés")}${carte(p.mails1, "contactées (premier mail)")}${carte(pc(p.mails1, p.profils_trouves), "des profils trouvés contactés")}${carte(p.en_file, "en file, pas encore écrites")}
+${carte(p.relances, "relances envoyées")}${carte(p.mails1 + p.relances, "mails envoyés au total")}${carte(p.reponses, "réponses")}${carte(pc(p.reponses, p.mails1), "taux de réponse")}
+${carte(p.reponses_apres_relance, "réponses après relance")}${carte(p.rebonds, "rebonds (adresses invalides)")}${carte(pc(p.rebonds, p.mails1), "taux de rebond (à garder sous 3 %)")}${carte(p.sans_reponse, "sans réponse pour l'instant")}</div>
+<div class="defile"><table><thead><tr><th>Jour</th><th class="n">Premiers mails</th><th class="n">Relances</th><th class="n">Total</th><th class="n">Réponses</th><th class="n">Rebonds</th></tr></thead><tbody>${lignes || '<tr><td colspan="6">—</td></tr>'}</tbody></table></div>`;
+}
 const h = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 async function tableau(res) {
   const ses = await sessionsDepuis(Math.floor(DEBUT_LANCEMENT / 1000));
@@ -115,6 +150,7 @@ h2{font-size:1rem;margin:22px 0 8px}.defile{overflow-x:auto}table{width:100%;bor
 <h1>talza · tableau de bord</h1><p class="s">Données Stripe, lues à l'instant. Un « clic » = une page de paiement ouverte depuis « Commander mon rapport ». Les visites du site sont dans Cloudflare Web Analytics.</p>
 <div class="cartes"><div class="carte"><b>${tot.clics}</b><span>clics sur Commander</span></div><div class="carte"><b>${tot.ventes}</b><span>ventes</span></div><div class="carte"><b>${tot.clics ? Math.round(tot.ventes * 100 / tot.clics) : 0} %</b><span>des clics finissent en vente</span></div><div class="carte"><b>${eur(tot.ca)}</b><span>encaissé TTC</span></div><div class="carte"><b>${e.restants}</b><span>rapports encore disponibles aujourd'hui</span></div><div class="carte"><b>${e.lancement ? e.places_lancement : "—"}</b><span>places au prix de lancement</span></div></div>
 <h2>Par jour</h2><div class="defile"><table><thead><tr><th>Jour</th><th class="n">Clics</th><th class="n">Ventes</th><th class="n">Taux</th><th class="n">Abandons</th><th class="n">Encaissé</th></tr></thead><tbody>${lignes}</tbody></table></div>
+${sectionProspection()}
 <h2>Dernières ventes</h2><div class="defile"><table><thead><tr><th>Date</th><th>TikTok</th><th class="n">Montant</th></tr></thead><tbody>${ventes}</tbody></table></div>
 </main></body></html>`;
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer" });
@@ -186,6 +222,7 @@ http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ tiktok }));
     }
     if (chemin === "/sante") { res.writeHead(200); return res.end("ok"); }
+    if (chemin === "/prospection" && req.method === "POST") return await recevoirProspection(req, res);
     if (chemin === "/tableau") {
       if (!E.TABLEAU_MDP) { res.writeHead(404); return res.end(); }
       if (!autorise(req)) { res.writeHead(401, { "WWW-Authenticate": 'Basic realm="talza", charset="UTF-8"', "Cache-Control": "no-store" }); return res.end("Mot de passe requis."); }
