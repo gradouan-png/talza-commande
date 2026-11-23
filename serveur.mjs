@@ -96,10 +96,10 @@ async function commander(res) {
     "custom_fields[1][label][type]": "custom",
     "custom_fields[1][label][custom]": "Ton prénom et ton nom (pour la facture)",
     "custom_fields[1][type]": "text",
-    "custom_text[submit][message]": "Ton audit TikTok arrive sous 48 h à l'adresse mail que tu donnes ici. Ton compte doit être public.",
+    "custom_text[submit][message]": "Ton rapport TikTok arrive sous 48 h à l'adresse mail que tu donnes ici. Ton compte doit être public.",
     // Rétractation (Gauthier, 23/11 10h07) : sans cette case, une cliente peut demander le remboursement après livraison.
     "consent_collection[terms_of_service]": "required",
-    "custom_text[terms_of_service_acceptance][message]": "J'accepte les [conditions de vente](" + SITE + "/conditions/). Je demande que l'audit commence tout de suite et je renonce à mon droit de rétractation une fois l'audit entièrement livré.",
+    "custom_text[terms_of_service_acceptance][message]": "J'accepte les [conditions de vente](" + SITE + "/conditions/). Je demande que la prestation commence tout de suite et je renonce à mon droit de rétractation une fois le rapport entièrement livré.",
     "metadata[offre]": e.lancement ? "audit-lancement" : "audit",
     success_url: SITE + "/merci/?commande={CHECKOUT_SESSION_ID}",
     cancel_url: SITE + "/",
