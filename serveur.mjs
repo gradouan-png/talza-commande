@@ -90,7 +90,7 @@ async function commander(res) {
     "invoice_creation[enabled]": "true",
     "custom_fields[0][key]": "tiktok",
     "custom_fields[0][label][type]": "custom",
-    "custom_fields[0][label][custom]": "Ton @ TikTok ou le lien de ton profil (compte public)",
+    "custom_fields[0][label][custom]": "Ton @ TikTok ou lien du profil (compte public)",
     "custom_fields[0][type]": "text",
     "custom_fields[1][key]": "nom",
     "custom_fields[1][label][type]": "custom",
