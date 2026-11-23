@@ -99,6 +99,12 @@ let visites = {};
 /* Vues de la page d'exemple talza.io/exemple/ (Gauthier, 23/11 15h27 « go ») : c'est là que mène le lien des mails de
    prospection. Même principe : /vue appelé par la page, compté si l'Origin est le site, repris et gardé par le Mac. */
 let vuesExemple = {};
+/* Visites par source (Gauthier, 23/11 20h33 : pub Meta, « 3 oui ») : talza.io/?ref=meta → /dispo?ref=meta et
+   /commander?ref=meta (metadata Stripe). Seulement [a-z0-9_-]{1,20} : rien d'autre n'est gardé. */
+const REF = /^[a-z0-9_-]{1,20}$/;
+let visitesRef = {};   // { jour: { ref: n } }
+const refDe = (req) => { const v = String(new URL(req.url, "http://x").searchParams.get("ref") || "").toLowerCase(); return REF.test(v) ? v : ""; };
+function nettoyerRef(o) { const out = {}; for (const [j, m] of Object.entries(o || {})) { if (!/^\d{4}-\d{2}-\d{2}$/.test(j) || typeof m !== "object" || !m) continue; for (const [k, v] of Object.entries(m)) if (REF.test(k) && Number.isFinite(+v) && +v >= 0) (out[j] ??= {})[k] = Math.floor(+v); } return out; }
 function cleProspectionOk(req) {
   const cle = E.PROSPECTION_CLE || "";
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
@@ -117,14 +123,25 @@ async function recevoirProspection(req, res) {
   prospection = { recu: new Date().toISOString(), profils_trouves: n(d.profils_trouves), en_file: n(d.en_file), mails1: n(d.mails1), relances: n(d.relances),
     reponses: n(d.reponses), reponses_apres_relance: n(d.reponses_apres_relance), rebonds: n(d.rebonds), ecartes: n(d.ecartes), sans_reponse: n(d.sans_reponse), par_jour: parJour,
     visites: Object.fromEntries(Object.entries(d.visites || {}).filter(([j]) => /^\d{4}-\d{2}-\d{2}$/.test(j)).map(([j, v]) => [j, n(v)])),
-    vues_exemple: Object.fromEntries(Object.entries(d.vues_exemple || {}).filter(([j]) => /^\d{4}-\d{2}-\d{2}$/.test(j)).map(([j, v]) => [j, n(v)])) };
+    vues_exemple: Object.fromEntries(Object.entries(d.vues_exemple || {}).filter(([j]) => /^\d{4}-\d{2}-\d{2}$/.test(j)).map(([j, v]) => [j, n(v)])),
+    visites_ref: nettoyerRef(d.visites_ref) };
   const aRendre = visites; visites = {};
   const exARendre = vuesExemple; vuesExemple = {};
+  const refARendre = visitesRef; visitesRef = {};
+  for (const [j, m] of Object.entries(refARendre)) for (const [k, v] of Object.entries(m)) (prospection.visites_ref[j] ??= {})[k] = (prospection.visites_ref[j][k] || 0) + v;
   for (const [j, v] of Object.entries(exARendre)) prospection.vues_exemple[j] = (prospection.vues_exemple[j] || 0) + v;
   // Les visites rendues au Mac sont déjà comptées ici aussi : sinon le tableau baisse jusqu'au prochain envoi du Mac
   // (2 visites → 1, vu par Gauthier le 23/11 12h57).
   for (const [j, v] of Object.entries(aRendre)) prospection.visites[j] = (prospection.visites[j] || 0) + v;
-  res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ visites: aRendre, vues_exemple: exARendre }));
+  res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ visites: aRendre, vues_exemple: exARendre, visites_ref: refARendre }));
+}
+function sectionSources(ses) {
+  const src = {};
+  const add = (k) => (src[k] ??= { visites: 0, clics: 0, ventes: 0, ca: 0 });
+  for (const m of [prospection?.visites_ref || {}, visitesRef]) for (const o of Object.values(m)) for (const [k, v] of Object.entries(o)) add(k).visites += v;
+  for (const x of ses) { const k = x.metadata?.ref; if (!k || !REF.test(k)) continue; const d = add(k); d.clics++; if (x.status === "complete" && x.payment_status === "paid") { d.ventes++; d.ca += (x.amount_total || 0) / 100; } }
+  const l = Object.entries(src).sort((a, b) => b[1].visites - a[1].visites).map(([k, d]) => `<tr><td>${h(k)}</td><td class="n">${d.visites}</td><td class="n">${d.clics}</td><td class="n">${d.ventes}</td><td class="n">${d.ca.toFixed(2).replace(".", ",")} €</td></tr>`).join("");
+  return `<h2>Par source (liens ?ref=…)</h2><div class="defile"><table><thead><tr><th>Source</th><th class="n">Visites</th><th class="n">Clics</th><th class="n">Ventes</th><th class="n">Encaissé</th></tr></thead><tbody>${l || '<tr><td colspan="5">Aucune visite avec ?ref= pour l\'instant (pub Meta : talza.io/?ref=meta).</td></tr>'}</tbody></table></div>`;
 }
 function sectionProspection() {
   const p = prospection;
@@ -178,6 +195,7 @@ h2{font-size:1rem;margin:22px 0 8px}.defile{overflow-x:auto}table{width:100%;bor
 <h1>talza · tableau de bord</h1><p class="s">Données Stripe, lues à l'instant${nbTests ? ` (${nbTests} essai${nbTests > 1 ? "s" : ""} de la maison exclu${nbTests > 1 ? "s" : ""} : adresses grapperagency.com ou talza.io, et essais d'avant la mise en vente)` : ""}. Un « clic » = une page de paiement ouverte depuis « Commander mon rapport ». Les visites du site sont dans Cloudflare Web Analytics.</p>
 <div class="cartes"><div class="carte"><b>${totVis}</b><span>visites de la page d'accueil</span></div><div class="carte"><b>${totEx}</b><span>vues de l'exemple (lien des mails)</span></div><div class="carte"><b>${totVis ? Math.round(tot.clics * 100 / totVis) : 0} %</b><span>des visites cliquent sur Commander</span></div><div class="carte"><b>${tot.clics}</b><span>clics sur Commander</span></div><div class="carte"><b>${tot.ventes}</b><span>ventes</span></div><div class="carte"><b>${tot.clics ? Math.round(tot.ventes * 100 / tot.clics) : 0} %</b><span>des clics finissent en vente</span></div><div class="carte"><b>${eur(tot.ca)}</b><span>encaissé TTC</span></div><div class="carte"><b>${e.restants}</b><span>rapports encore disponibles aujourd'hui</span></div><div class="carte"><b>${e.lancement ? e.places_lancement : "—"}</b><span>places au prix de lancement</span></div></div>
 <h2>Par jour</h2><div class="defile"><table><thead><tr><th>Jour</th><th class="n">Visites</th><th class="n">Vues exemple</th><th class="n">Clics</th><th class="n">Ventes</th><th class="n">Taux</th><th class="n">Abandons</th><th class="n">Encaissé</th></tr></thead><tbody>${lignes}</tbody></table></div>
+${sectionSources(ses)}
 ${sectionProspection()}
 <h2>Dernières ventes</h2><div class="defile"><table><thead><tr><th>Date</th><th>TikTok</th><th class="n">Montant</th></tr></thead><tbody>${ventes}</tbody></table></div>
 </main></body></html>`;
@@ -198,7 +216,7 @@ async function etat() {
   return v;
 }
 
-async function commander(res) {
+async function commander(res, ref = "") {
   cache.t = 0;                                   // recompter au moment de la commande, pas sur le cache
   const e = await etat();
   if (e.restants <= 0) return rediriger(res, SITE + "/#complet");
@@ -223,6 +241,7 @@ async function commander(res) {
     "consent_collection[terms_of_service]": "required",
     "custom_text[terms_of_service_acceptance][message]": "J'accepte les [conditions de vente](" + SITE + "/conditions/). Je demande que la prestation commence tout de suite et je renonce à mon droit de rétractation une fois le rapport entièrement livré.",
     "metadata[offre]": e.lancement ? "audit-lancement" : "audit",
+    ...(ref ? { "metadata[ref]": ref } : {}),
     success_url: SITE + "/merci/?commande={CHECKOUT_SESSION_ID}",
     cancel_url: SITE + "/",
   });
@@ -235,7 +254,7 @@ http.createServer(async (req, res) => {
   const chemin = new URL(req.url, "http://x").pathname;
   try {
     if (chemin === "/dispo") {
-      if (req.headers.origin === SITE) { const j = jourMadrid(Date.now() / 1000); visites[j] = (visites[j] || 0) + 1; }
+      if (req.headers.origin === SITE) { const j = jourMadrid(Date.now() / 1000); visites[j] = (visites[j] || 0) + 1; const ref = refDe(req); if (ref) (visitesRef[j] ??= {})[ref] = (visitesRef[j][ref] || 0) + 1; }
       const e = await etat();
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" });
       return res.end(JSON.stringify(e));
@@ -245,7 +264,7 @@ http.createServer(async (req, res) => {
       res.writeHead(204, { "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (chemin === "/commander") return await commander(res);
+    if (chemin === "/commander") return await commander(res, refDe(req));
     if (chemin === "/commande") {
       const id = new URL(req.url, "http://x").searchParams.get("id") || "";
       if (!/^cs_(live|test)_[A-Za-z0-9]+$/.test(id)) { res.writeHead(404, { "Access-Control-Allow-Origin": SITE }); return res.end(); }
