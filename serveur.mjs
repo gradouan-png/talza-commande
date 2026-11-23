@@ -115,6 +115,9 @@ async function recevoirProspection(req, res) {
     reponses: n(d.reponses), reponses_apres_relance: n(d.reponses_apres_relance), rebonds: n(d.rebonds), ecartes: n(d.ecartes), sans_reponse: n(d.sans_reponse), par_jour: parJour,
     visites: Object.fromEntries(Object.entries(d.visites || {}).filter(([j]) => /^\d{4}-\d{2}-\d{2}$/.test(j)).map(([j, v]) => [j, n(v)])) };
   const aRendre = visites; visites = {};
+  // Les visites rendues au Mac sont déjà comptées ici aussi : sinon le tableau baisse jusqu'au prochain envoi du Mac
+  // (2 visites → 1, vu par Gauthier le 23/11 12h57).
+  for (const [j, v] of Object.entries(aRendre)) prospection.visites[j] = (prospection.visites[j] || 0) + v;
   res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ visites: aRendre }));
 }
 function sectionProspection() {
