@@ -103,6 +103,7 @@ let vuesExemple = {};
    /commander?ref=meta (metadata Stripe). Seulement [a-z0-9_-]{1,20} : rien d'autre n'est gardé. */
 const REF = /^[a-z0-9_-]{1,20}$/;
 let visitesRef = {};   // { jour: { ref: n } }
+const estMoi = (req) => new URL(req.url, "http://x").searchParams.has("moi");   // visites de Gauthier : jamais comptées (23/11 21h34)
 const refDe = (req) => { const v = String(new URL(req.url, "http://x").searchParams.get("ref") || "").toLowerCase(); return REF.test(v) ? v : ""; };
 function nettoyerRef(o) { const out = {}; for (const [j, m] of Object.entries(o || {})) { if (!/^\d{4}-\d{2}-\d{2}$/.test(j) || typeof m !== "object" || !m) continue; for (const [k, v] of Object.entries(m)) if (REF.test(k) && Number.isFinite(+v) && +v >= 0) (out[j] ??= {})[k] = Math.floor(+v); } return out; }
 function cleProspectionOk(req) {
@@ -161,7 +162,7 @@ const h = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;
    ouvertes avant la mise en vente réelle (essais du 23/11 au matin). */
 const INTERNES = /@(grapperagency\.com|talza\.io)$/i;
 const DEBUT_REEL = Date.parse(E.DEBUT_REEL || "2026-11-23T20:50:00+01:00") / 1000;
-const estTest = (x) => INTERNES.test(x.customer_details?.email || x.customer_email || "") || x.created < DEBUT_REEL;
+const estTest = (x) => INTERNES.test(x.customer_details?.email || x.customer_email || "") || x.created < DEBUT_REEL || x.metadata?.interne === "1";
 async function tableau(res) {
   const toutes = await sessionsDepuis(Math.floor(DEBUT_LANCEMENT / 1000));
   const ses = toutes.filter((x) => !estTest(x));
@@ -216,7 +217,7 @@ async function etat() {
   return v;
 }
 
-async function commander(res, ref = "") {
+async function commander(res, ref = "", moi = false) {
   cache.t = 0;                                   // recompter au moment de la commande, pas sur le cache
   const e = await etat();
   if (e.restants <= 0) return rediriger(res, SITE + "/#complet");
@@ -242,6 +243,7 @@ async function commander(res, ref = "") {
     "custom_text[terms_of_service_acceptance][message]": "J'accepte les [conditions de vente](" + SITE + "/conditions/). Je demande que la prestation commence tout de suite et je renonce à mon droit de rétractation une fois le rapport entièrement livré.",
     "metadata[offre]": e.lancement ? "audit-lancement" : "audit",
     ...(ref ? { "metadata[ref]": ref } : {}),
+    ...(moi ? { "metadata[interne]": "1" } : {}),
     success_url: SITE + "/merci/?commande={CHECKOUT_SESSION_ID}",
     cancel_url: SITE + "/",
   });
@@ -254,7 +256,7 @@ http.createServer(async (req, res) => {
   const chemin = new URL(req.url, "http://x").pathname;
   try {
     if (chemin === "/dispo") {
-      if (req.headers.origin === SITE) { const j = jourMadrid(Date.now() / 1000); visites[j] = (visites[j] || 0) + 1; const ref = refDe(req); if (ref) (visitesRef[j] ??= {})[ref] = (visitesRef[j][ref] || 0) + 1; }
+      if (req.headers.origin === SITE && !estMoi(req)) { const j = jourMadrid(Date.now() / 1000); visites[j] = (visites[j] || 0) + 1; const ref = refDe(req); if (ref) (visitesRef[j] ??= {})[ref] = (visitesRef[j][ref] || 0) + 1; }
       const e = await etat();
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" });
       return res.end(JSON.stringify(e));
@@ -264,7 +266,7 @@ http.createServer(async (req, res) => {
       res.writeHead(204, { "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" });
       return res.end();
     }
-    if (chemin === "/commander") return await commander(res, refDe(req));
+    if (chemin === "/commander") return await commander(res, refDe(req), estMoi(req));
     if (chemin === "/commande") {
       const id = new URL(req.url, "http://x").searchParams.get("id") || "";
       if (!/^cs_(live|test)_[A-Za-z0-9]+$/.test(id)) { res.writeHead(404, { "Access-Control-Allow-Origin": SITE }); return res.end(); }
