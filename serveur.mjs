@@ -55,7 +55,7 @@ async function payes(depuis, filtre = () => true) {
     const q = new URLSearchParams({ status: "complete", limit: "100", "created[gte]": String(depuis) });
     if (apres) q.set("starting_after", apres);
     const j = await stripe("checkout/sessions?" + q);
-    for (const s of j.data) if (s.payment_status === "paid" && filtre(s)) n++;
+    for (const s of j.data) if (s.payment_status === "paid" && filtre(s) && !/@(grapperagency\.com|talza\.io)$/i.test(s.customer_details?.email || "")) n++;   // un achat test de la maison ne prend pas de place
     if (!j.has_more || !j.data.length) break;
     apres = j.data[j.data.length - 1].id;
   }
@@ -131,8 +131,15 @@ ${carte(p.reponses_apres_relance, "réponses après relance")}${carte(p.rebonds,
 <div class="defile"><table><thead><tr><th>Jour</th><th class="n">Premiers mails</th><th class="n">Relances</th><th class="n">Total</th><th class="n">Réponses</th><th class="n">Rebonds</th></tr></thead><tbody>${lignes || '<tr><td colspan="6">—</td></tr>'}</tbody></table></div>`;
 }
 const h = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+/* Tests exclus du tableau (Gauthier, 23/11 12h46 : « la vente vient de moi ») : adresses de la maison et sessions
+   ouvertes avant la mise en vente réelle (essais du 23/11 au matin). */
+const INTERNES = /@(grapperagency\.com|talza\.io)$/i;
+const DEBUT_REEL = Date.parse(E.DEBUT_REEL || "2026-11-23T11:00:00+01:00") / 1000;
+const estTest = (x) => INTERNES.test(x.customer_details?.email || x.customer_email || "") || x.created < DEBUT_REEL;
 async function tableau(res) {
-  const ses = await sessionsDepuis(Math.floor(DEBUT_LANCEMENT / 1000));
+  const toutes = await sessionsDepuis(Math.floor(DEBUT_LANCEMENT / 1000));
+  const ses = toutes.filter((x) => !estTest(x));
+  const nbTests = toutes.length - ses.length;
   const parJour = {};
   for (const x of ses) {
     const j = jourMadrid(x.created), d = (parJour[j] ??= { clics: 0, ventes: 0, ca: 0, abandons: 0 });
@@ -157,7 +164,7 @@ async function tableau(res) {
 <style>:root{color-scheme:light dark}body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:#f6f4fb;color:#1c1340}@media(prefers-color-scheme:dark){body{background:#14121f;color:#ecebf3}.carte,table{background:#1d1a2c!important}td,th{border-color:#34304a!important}}
 main{max-width:860px;margin:0 auto;padding:20px 16px}h1{font-size:1.3rem;margin:0 0 4px}p.s{margin:0 0 18px;opacity:.7;font-size:.9rem}.cartes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px}.carte{background:#fff;border-radius:10px;padding:12px 14px}.carte b{display:block;font-size:1.6rem}.carte span{font-size:.85rem;opacity:.75}
 h2{font-size:1rem;margin:22px 0 8px}.defile{overflow-x:auto}table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;font-size:.92rem}th,td{padding:8px 10px;border-bottom:1px solid #e6e1f3;text-align:left;white-space:nowrap}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}</style></head><body><main>
-<h1>talza · tableau de bord</h1><p class="s">Données Stripe, lues à l'instant. Un « clic » = une page de paiement ouverte depuis « Commander mon rapport ». Les visites du site sont dans Cloudflare Web Analytics.</p>
+<h1>talza · tableau de bord</h1><p class="s">Données Stripe, lues à l'instant${nbTests ? ` (${nbTests} essai${nbTests > 1 ? "s" : ""} de la maison exclu${nbTests > 1 ? "s" : ""} : adresses grapperagency.com ou talza.io, et essais d'avant la mise en vente)` : ""}. Un « clic » = une page de paiement ouverte depuis « Commander mon rapport ». Les visites du site sont dans Cloudflare Web Analytics.</p>
 <div class="cartes"><div class="carte"><b>${totVis}</b><span>visites de la page d'accueil</span></div><div class="carte"><b>${totVis ? Math.round(tot.clics * 100 / totVis) : 0} %</b><span>des visites cliquent sur Commander</span></div><div class="carte"><b>${tot.clics}</b><span>clics sur Commander</span></div><div class="carte"><b>${tot.ventes}</b><span>ventes</span></div><div class="carte"><b>${tot.clics ? Math.round(tot.ventes * 100 / tot.clics) : 0} %</b><span>des clics finissent en vente</span></div><div class="carte"><b>${eur(tot.ca)}</b><span>encaissé TTC</span></div><div class="carte"><b>${e.restants}</b><span>rapports encore disponibles aujourd'hui</span></div><div class="carte"><b>${e.lancement ? e.places_lancement : "—"}</b><span>places au prix de lancement</span></div></div>
 <h2>Par jour</h2><div class="defile"><table><thead><tr><th>Jour</th><th class="n">Visites</th><th class="n">Clics</th><th class="n">Ventes</th><th class="n">Taux</th><th class="n">Abandons</th><th class="n">Encaissé</th></tr></thead><tbody>${lignes}</tbody></table></div>
 ${sectionProspection()}
