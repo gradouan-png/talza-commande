@@ -14,6 +14,7 @@
 //   PAR_JOUR          5    (audits par jour, minuit à minuit, heure de Madrid)
 //   SITE              https://talza.io
 import http from "node:http";
+import crypto from "node:crypto";
 
 const E = process.env;
 const CLE = E.STRIPE_CLE;
@@ -62,6 +63,63 @@ async function payes(depuis, filtre = () => true) {
 }
 
 let cache = { t: 0, v: null };
+
+/* ─── Tableau de bord (Gauthier, 23/11 11h52 : « go tableau de bord ») : clics sur « Commander » (sessions de paiement
+   créées), ventes, chiffre d'affaires, abandons, par jour. Lecture seule de Stripe ; protégé par un mot de passe
+   (TABLEAU_MDP, réglage Render) vérifié AVANT toute lecture ; sans ce réglage, la page n'existe pas. */
+const jourMadrid = (sec) => new Intl.DateTimeFormat("fr-CA", { timeZone: ZONE }).format(new Date(sec * 1000));
+async function sessionsDepuis(depuis) {
+  const toutes = []; let apres = null;
+  for (let tour = 0; tour < 20; tour++) {
+    const q = new URLSearchParams({ limit: "100", "created[gte]": String(depuis) });
+    if (apres) q.set("starting_after", apres);
+    const j = await stripe("checkout/sessions?" + q);
+    toutes.push(...j.data);
+    if (!j.has_more || !j.data.length) break;
+    apres = j.data[j.data.length - 1].id;
+  }
+  return toutes;
+}
+function autorise(req) {
+  const mdp = E.TABLEAU_MDP || "";
+  if (mdp.length < 12) return false;
+  const m = /^Basic (.+)$/.exec(req.headers.authorization || "");
+  if (!m) return false;
+  const recu = Buffer.from(Buffer.from(m[1], "base64").toString("utf8").split(":").slice(1).join(":"));
+  const attendu = Buffer.from(mdp);
+  return recu.length === attendu.length && crypto.timingSafeEqual(recu, attendu);
+}
+const h = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+async function tableau(res) {
+  const ses = await sessionsDepuis(Math.floor(DEBUT_LANCEMENT / 1000));
+  const parJour = {};
+  for (const x of ses) {
+    const j = jourMadrid(x.created), d = (parJour[j] ??= { clics: 0, ventes: 0, ca: 0, abandons: 0 });
+    d.clics++;
+    if (x.status === "complete" && x.payment_status === "paid") { d.ventes++; d.ca += (x.amount_total || 0) / 100; }
+    else if (x.status === "expired") d.abandons++;
+  }
+  const jours = Object.keys(parJour).sort().reverse();
+  const tot = jours.reduce((t, j) => ({ clics: t.clics + parJour[j].clics, ventes: t.ventes + parJour[j].ventes, ca: t.ca + parJour[j].ca }), { clics: 0, ventes: 0, ca: 0 });
+  const ventes = ses.filter((x) => x.status === "complete" && x.payment_status === "paid").slice(0, 20).map((x) => {
+    const tk = (x.custom_fields || []).find((f) => f.key === "tiktok")?.text?.value || "—";
+    return `<tr><td>${h(new Date(x.created * 1000).toLocaleString("fr-FR", { timeZone: ZONE, dateStyle: "short", timeStyle: "short" }))}</td><td>${h(tk)}</td><td class="n">${((x.amount_total || 0) / 100).toFixed(2).replace(".", ",")} €</td></tr>`;
+  }).join("") || '<tr><td colspan="3">Aucune vente pour l\'instant.</td></tr>';
+  const e = await etat();
+  const eur = (v) => v.toFixed(2).replace(".", ",") + " €";
+  const lignes = jours.map((j) => { const d = parJour[j]; return `<tr><td>${h(j)}</td><td class="n">${d.clics}</td><td class="n">${d.ventes}</td><td class="n">${d.clics ? Math.round(d.ventes * 100 / d.clics) : 0} %</td><td class="n">${d.abandons}</td><td class="n">${eur(d.ca)}</td></tr>`; }).join("") || '<tr><td colspan="6">Aucun clic pour l\'instant.</td></tr>';
+  const page = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>talza · tableau de bord</title>
+<style>:root{color-scheme:light dark}body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:#f6f4fb;color:#1c1340}@media(prefers-color-scheme:dark){body{background:#14121f;color:#ecebf3}.carte,table{background:#1d1a2c!important}td,th{border-color:#34304a!important}}
+main{max-width:860px;margin:0 auto;padding:20px 16px}h1{font-size:1.3rem;margin:0 0 4px}p.s{margin:0 0 18px;opacity:.7;font-size:.9rem}.cartes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px}.carte{background:#fff;border-radius:10px;padding:12px 14px}.carte b{display:block;font-size:1.6rem}.carte span{font-size:.85rem;opacity:.75}
+h2{font-size:1rem;margin:22px 0 8px}.defile{overflow-x:auto}table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;font-size:.92rem}th,td{padding:8px 10px;border-bottom:1px solid #e6e1f3;text-align:left;white-space:nowrap}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}</style></head><body><main>
+<h1>talza · tableau de bord</h1><p class="s">Données Stripe, lues à l'instant. Un « clic » = une page de paiement ouverte depuis « Commander mon rapport ». Les visites du site sont dans Cloudflare Web Analytics.</p>
+<div class="cartes"><div class="carte"><b>${tot.clics}</b><span>clics sur Commander</span></div><div class="carte"><b>${tot.ventes}</b><span>ventes</span></div><div class="carte"><b>${tot.clics ? Math.round(tot.ventes * 100 / tot.clics) : 0} %</b><span>des clics finissent en vente</span></div><div class="carte"><b>${eur(tot.ca)}</b><span>encaissé TTC</span></div><div class="carte"><b>${e.restants}</b><span>rapports encore disponibles aujourd'hui</span></div><div class="carte"><b>${e.lancement ? e.places_lancement : "—"}</b><span>places au prix de lancement</span></div></div>
+<h2>Par jour</h2><div class="defile"><table><thead><tr><th>Jour</th><th class="n">Clics</th><th class="n">Ventes</th><th class="n">Taux</th><th class="n">Abandons</th><th class="n">Encaissé</th></tr></thead><tbody>${lignes}</tbody></table></div>
+<h2>Dernières ventes</h2><div class="defile"><table><thead><tr><th>Date</th><th>TikTok</th><th class="n">Montant</th></tr></thead><tbody>${ventes}</tbody></table></div>
+</main></body></html>`;
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer" });
+  res.end(page);
+}
 async function etat() {
   if (cache.v && Date.now() - cache.t < 20000) return cache.v;   // 20 s : le site interroge à chaque visite
   const lancement = Date.now() <= FIN_LANCEMENT;
@@ -128,6 +186,11 @@ http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ tiktok }));
     }
     if (chemin === "/sante") { res.writeHead(200); return res.end("ok"); }
+    if (chemin === "/tableau") {
+      if (!E.TABLEAU_MDP) { res.writeHead(404); return res.end(); }
+      if (!autorise(req)) { res.writeHead(401, { "WWW-Authenticate": 'Basic realm="talza", charset="UTF-8"', "Cache-Control": "no-store" }); return res.end("Mot de passe requis."); }
+      return await tableau(res);
+    }
     res.writeHead(404); res.end();
   } catch (err) {
     // Un refus ne renseigne pas : rien de Stripe ne part vers le navigateur ; le détail reste dans le journal Render.
