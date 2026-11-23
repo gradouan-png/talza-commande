@@ -96,6 +96,9 @@ let prospection = null;
    demandes venues du site, par jour, sans cookie ni adresse IP. Le Mac les reprend à chaque envoi de chiffres et les
    garde (la mémoire d'ici repart de zéro à chaque redémarrage). */
 let visites = {};
+/* Vues de la page d'exemple talza.io/exemple/ (Gauthier, 23/11 15h27 « go ») : c'est là que mène le lien des mails de
+   prospection. Même principe : /vue appelé par la page, compté si l'Origin est le site, repris et gardé par le Mac. */
+let vuesExemple = {};
 function cleProspectionOk(req) {
   const cle = E.PROSPECTION_CLE || "";
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
@@ -113,12 +116,15 @@ async function recevoirProspection(req, res) {
   for (const [j, v] of Object.entries(d.par_jour || {})) if (/^\d{4}-\d{2}-\d{2}$/.test(j)) parJour[j] = { mails1: n(v.mails1), relances: n(v.relances), reponses: n(v.reponses), rebonds: n(v.rebonds) };
   prospection = { recu: new Date().toISOString(), profils_trouves: n(d.profils_trouves), en_file: n(d.en_file), mails1: n(d.mails1), relances: n(d.relances),
     reponses: n(d.reponses), reponses_apres_relance: n(d.reponses_apres_relance), rebonds: n(d.rebonds), ecartes: n(d.ecartes), sans_reponse: n(d.sans_reponse), par_jour: parJour,
-    visites: Object.fromEntries(Object.entries(d.visites || {}).filter(([j]) => /^\d{4}-\d{2}-\d{2}$/.test(j)).map(([j, v]) => [j, n(v)])) };
+    visites: Object.fromEntries(Object.entries(d.visites || {}).filter(([j]) => /^\d{4}-\d{2}-\d{2}$/.test(j)).map(([j, v]) => [j, n(v)])),
+    vues_exemple: Object.fromEntries(Object.entries(d.vues_exemple || {}).filter(([j]) => /^\d{4}-\d{2}-\d{2}$/.test(j)).map(([j, v]) => [j, n(v)])) };
   const aRendre = visites; visites = {};
+  const exARendre = vuesExemple; vuesExemple = {};
+  for (const [j, v] of Object.entries(exARendre)) prospection.vues_exemple[j] = (prospection.vues_exemple[j] || 0) + v;
   // Les visites rendues au Mac sont déjà comptées ici aussi : sinon le tableau baisse jusqu'au prochain envoi du Mac
   // (2 visites → 1, vu par Gauthier le 23/11 12h57).
   for (const [j, v] of Object.entries(aRendre)) prospection.visites[j] = (prospection.visites[j] || 0) + v;
-  res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ visites: aRendre }));
+  res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ visites: aRendre, vues_exemple: exARendre }));
 }
 function sectionProspection() {
   const p = prospection;
@@ -150,7 +156,7 @@ async function tableau(res) {
     if (x.status === "complete" && x.payment_status === "paid") { d.ventes++; d.ca += (x.amount_total || 0) / 100; }
     else if (x.status === "expired") d.abandons++;
   }
-  const jours = [...new Set([...Object.keys(parJour), ...Object.keys({ ...(prospection?.visites || {}), ...visites })])].sort().reverse();
+  const jours = [...new Set([...Object.keys(parJour), ...Object.keys({ ...(prospection?.visites || {}), ...visites, ...(prospection?.vues_exemple || {}), ...vuesExemple })])].sort().reverse();
   for (const j of jours) parJour[j] ??= { clics: 0, ventes: 0, ca: 0, abandons: 0 };
   const tot = jours.reduce((t, j) => ({ clics: t.clics + parJour[j].clics, ventes: t.ventes + parJour[j].ventes, ca: t.ca + parJour[j].ca }), { clics: 0, ventes: 0, ca: 0 });
   const ventes = ses.filter((x) => x.status === "complete" && x.payment_status === "paid").slice(0, 20).map((x) => {
@@ -161,15 +167,17 @@ async function tableau(res) {
   const vis = { ...(prospection?.visites || {}) };
   for (const [j, v] of Object.entries(visites)) vis[j] = (vis[j] || 0) + v;   // pas encore repris par le Mac
   const totVis = Object.values(vis).reduce((a, b) => a + b, 0);
+  const vEx = (j) => (prospection?.vues_exemple?.[j] || 0) + (vuesExemple[j] || 0);
+  const totEx = [...new Set([...Object.keys(prospection?.vues_exemple || {}), ...Object.keys(vuesExemple)])].reduce((a, j) => a + vEx(j), 0);
   const eur = (v) => v.toFixed(2).replace(".", ",") + " €";
-  const lignes = jours.map((j) => { const d = parJour[j]; return `<tr><td>${h(j)}</td><td class="n">${(prospection?.visites?.[j] || 0) + (visites[j] || 0)}</td><td class="n">${d.clics}</td><td class="n">${d.ventes}</td><td class="n">${d.clics ? Math.round(d.ventes * 100 / d.clics) : 0} %</td><td class="n">${d.abandons}</td><td class="n">${eur(d.ca)}</td></tr>`; }).join("") || '<tr><td colspan="7">Aucun clic pour l\'instant.</td></tr>';
+  const lignes = jours.map((j) => { const d = parJour[j]; return `<tr><td>${h(j)}</td><td class="n">${(prospection?.visites?.[j] || 0) + (visites[j] || 0)}</td><td class="n">${vEx(j)}</td><td class="n">${d.clics}</td><td class="n">${d.ventes}</td><td class="n">${d.clics ? Math.round(d.ventes * 100 / d.clics) : 0} %</td><td class="n">${d.abandons}</td><td class="n">${eur(d.ca)}</td></tr>`; }).join("") || '<tr><td colspan="8">Aucun clic pour l\'instant.</td></tr>';
   const page = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>talza · tableau de bord</title>
 <style>:root{color-scheme:light dark}body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:#f6f4fb;color:#1c1340}@media(prefers-color-scheme:dark){body{background:#14121f;color:#ecebf3}.carte,table{background:#1d1a2c!important}td,th{border-color:#34304a!important}}
 main{max-width:860px;margin:0 auto;padding:20px 16px}h1{font-size:1.3rem;margin:0 0 4px}p.s{margin:0 0 18px;opacity:.7;font-size:.9rem}.cartes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px}.carte{background:#fff;border-radius:10px;padding:12px 14px}.carte b{display:block;font-size:1.6rem}.carte span{font-size:.85rem;opacity:.75}
 h2{font-size:1rem;margin:22px 0 8px}.defile{overflow-x:auto}table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;font-size:.92rem}th,td{padding:8px 10px;border-bottom:1px solid #e6e1f3;text-align:left;white-space:nowrap}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}</style></head><body><main>
 <h1>talza · tableau de bord</h1><p class="s">Données Stripe, lues à l'instant${nbTests ? ` (${nbTests} essai${nbTests > 1 ? "s" : ""} de la maison exclu${nbTests > 1 ? "s" : ""} : adresses grapperagency.com ou talza.io, et essais d'avant la mise en vente)` : ""}. Un « clic » = une page de paiement ouverte depuis « Commander mon rapport ». Les visites du site sont dans Cloudflare Web Analytics.</p>
-<div class="cartes"><div class="carte"><b>${totVis}</b><span>visites de la page d'accueil</span></div><div class="carte"><b>${totVis ? Math.round(tot.clics * 100 / totVis) : 0} %</b><span>des visites cliquent sur Commander</span></div><div class="carte"><b>${tot.clics}</b><span>clics sur Commander</span></div><div class="carte"><b>${tot.ventes}</b><span>ventes</span></div><div class="carte"><b>${tot.clics ? Math.round(tot.ventes * 100 / tot.clics) : 0} %</b><span>des clics finissent en vente</span></div><div class="carte"><b>${eur(tot.ca)}</b><span>encaissé TTC</span></div><div class="carte"><b>${e.restants}</b><span>rapports encore disponibles aujourd'hui</span></div><div class="carte"><b>${e.lancement ? e.places_lancement : "—"}</b><span>places au prix de lancement</span></div></div>
-<h2>Par jour</h2><div class="defile"><table><thead><tr><th>Jour</th><th class="n">Visites</th><th class="n">Clics</th><th class="n">Ventes</th><th class="n">Taux</th><th class="n">Abandons</th><th class="n">Encaissé</th></tr></thead><tbody>${lignes}</tbody></table></div>
+<div class="cartes"><div class="carte"><b>${totVis}</b><span>visites de la page d'accueil</span></div><div class="carte"><b>${totEx}</b><span>vues de l'exemple (lien des mails)</span></div><div class="carte"><b>${totVis ? Math.round(tot.clics * 100 / totVis) : 0} %</b><span>des visites cliquent sur Commander</span></div><div class="carte"><b>${tot.clics}</b><span>clics sur Commander</span></div><div class="carte"><b>${tot.ventes}</b><span>ventes</span></div><div class="carte"><b>${tot.clics ? Math.round(tot.ventes * 100 / tot.clics) : 0} %</b><span>des clics finissent en vente</span></div><div class="carte"><b>${eur(tot.ca)}</b><span>encaissé TTC</span></div><div class="carte"><b>${e.restants}</b><span>rapports encore disponibles aujourd'hui</span></div><div class="carte"><b>${e.lancement ? e.places_lancement : "—"}</b><span>places au prix de lancement</span></div></div>
+<h2>Par jour</h2><div class="defile"><table><thead><tr><th>Jour</th><th class="n">Visites</th><th class="n">Vues exemple</th><th class="n">Clics</th><th class="n">Ventes</th><th class="n">Taux</th><th class="n">Abandons</th><th class="n">Encaissé</th></tr></thead><tbody>${lignes}</tbody></table></div>
 ${sectionProspection()}
 <h2>Dernières ventes</h2><div class="defile"><table><thead><tr><th>Date</th><th>TikTok</th><th class="n">Montant</th></tr></thead><tbody>${ventes}</tbody></table></div>
 </main></body></html>`;
@@ -231,6 +239,11 @@ http.createServer(async (req, res) => {
       const e = await etat();
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" });
       return res.end(JSON.stringify(e));
+    }
+    if (chemin === "/vue") {
+      if (req.headers.origin === SITE) { const j = jourMadrid(Date.now() / 1000); vuesExemple[j] = (vuesExemple[j] || 0) + 1; }
+      res.writeHead(204, { "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" });
+      return res.end();
     }
     if (chemin === "/commander") return await commander(res);
     if (chemin === "/commande") {
