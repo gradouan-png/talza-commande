@@ -230,7 +230,10 @@ http.createServer(async (req, res) => {
       const champ = (c.custom_fields || []).find(f => f.key === "tiktok");
       const tiktok = c.payment_status === "paid" && champ && champ.text ? champ.text.value : "";
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" });
-      return res.end(JSON.stringify({ tiktok }));
+      // L'adresse de la commande, rendue à la seule page qui détient l'identifiant de session (Gauthier, 23/11 12h33 :
+      // « précise mon mail ») : la cliente vérifie l'adresse où partira son rapport, comme sur le reçu Stripe.
+      const email = c.payment_status === "paid" ? (c.customer_details?.email || "") : "";
+      return res.end(JSON.stringify({ tiktok, email }));
     }
     if (chemin === "/sante") { res.writeHead(200); return res.end("ok"); }
     if (chemin === "/prospection" && req.method === "POST") return await recevoirProspection(req, res);
