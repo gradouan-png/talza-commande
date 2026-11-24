@@ -103,6 +103,27 @@ let vuesExemple = {};
    /commander?ref=meta (metadata Stripe). Seulement [a-z0-9_-]{1,20} : rien d'autre n'est gardé. */
 const REF = /^[a-z0-9_-]{1,20}$/;
 let visitesRef = {};   // { jour: { ref: n } }
+/* Avis des créatrices (Gauthier, 24/11 12h21) : talza.io/avis/ poste ici. Gardés en mémoire jusqu'à ce que le Mac les
+   reprenne (toutes les 2 min, avec les chiffres) ; jamais affichés ni renvoyés au navigateur. Plafond de 200 en
+   attente : au-delà, refus (ce n'est plus une créatrice, c'est un robot). */
+let avisEnAttente = [];
+const txt = (v, max) => String(v ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim().slice(0, max);
+async function recevoirAvis(req, res) {
+  const entete = { "Access-Control-Allow-Origin": SITE, "Cache-Control": "no-store" };
+  if (req.headers.origin !== SITE) { res.writeHead(403, entete); return res.end(); }
+  let corps = "";
+  for await (const morceau of req) { corps += morceau; if (corps.length > 10_000) { res.writeHead(413, entete); return res.end(); } }
+  let d; try { d = JSON.parse(corps); } catch { res.writeHead(400, entete); return res.end(); }
+  if (!d || typeof d !== "object") { res.writeHead(400, entete); return res.end(); }
+  if (d.site) { res.writeHead(204, entete); return res.end(); }   // champ piège rempli : un robot, on fait comme si
+  const note = Math.floor(+d.note);
+  const publication = ["nom", "prenom", "non"].includes(d.publication) ? d.publication : "";
+  const a = { recu: new Date().toISOString(), note, servi: txt(d.servi, 1500), changer: txt(d.changer, 1500), recommander: txt(d.recommander, 1500),
+    prenom: txt(d.prenom, 60), tiktok: txt(d.tiktok, 60), publication };
+  if (!(note >= 1 && note <= 5) || !publication || !(a.servi || a.changer || a.recommander) || avisEnAttente.length >= 200) { res.writeHead(400, entete); return res.end(); }
+  avisEnAttente.push(a);
+  res.writeHead(204, entete); return res.end();
+}
 const estMoi = (req) => new URL(req.url, "http://x").searchParams.has("moi");   // visites de Gauthier : jamais comptées (23/11 21h34)
 const refDe = (req) => { const v = String(new URL(req.url, "http://x").searchParams.get("ref") || "").toLowerCase(); return REF.test(v) ? v : ""; };
 function nettoyerRef(o) { const out = {}; for (const [j, m] of Object.entries(o || {})) { if (!/^\d{4}-\d{2}-\d{2}$/.test(j) || typeof m !== "object" || !m) continue; for (const [k, v] of Object.entries(m)) if (REF.test(k) && Number.isFinite(+v) && +v >= 0) (out[j] ??= {})[k] = Math.floor(+v); } return out; }
@@ -129,12 +150,13 @@ async function recevoirProspection(req, res) {
   const aRendre = visites; visites = {};
   const exARendre = vuesExemple; vuesExemple = {};
   const refARendre = visitesRef; visitesRef = {};
+  const avisARendre = avisEnAttente; avisEnAttente = [];
   for (const [j, m] of Object.entries(refARendre)) for (const [k, v] of Object.entries(m)) (prospection.visites_ref[j] ??= {})[k] = (prospection.visites_ref[j][k] || 0) + v;
   for (const [j, v] of Object.entries(exARendre)) prospection.vues_exemple[j] = (prospection.vues_exemple[j] || 0) + v;
   // Les visites rendues au Mac sont déjà comptées ici aussi : sinon le tableau baisse jusqu'au prochain envoi du Mac
   // (2 visites → 1, vu par Gauthier le 23/11 12h57).
   for (const [j, v] of Object.entries(aRendre)) prospection.visites[j] = (prospection.visites[j] || 0) + v;
-  res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ visites: aRendre, vues_exemple: exARendre, visites_ref: refARendre }));
+  res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ visites: aRendre, vues_exemple: exARendre, visites_ref: refARendre, avis: avisARendre }));
 }
 function sectionSources(ses) {
   const src = {};
@@ -281,6 +303,7 @@ http.createServer(async (req, res) => {
     }
     if (chemin === "/sante") { res.writeHead(200); return res.end("ok"); }
     if (chemin === "/prospection" && req.method === "POST") return await recevoirProspection(req, res);
+    if (chemin === "/avis" && req.method === "POST") return await recevoirAvis(req, res);
     if (chemin === "/tableau") {
       if (!E.TABLEAU_MDP) { res.writeHead(404); return res.end(); }
       if (!autorise(req)) { res.writeHead(401, { "WWW-Authenticate": 'Basic realm="talza", charset="UTF-8"', "Cache-Control": "no-store" }); return res.end("Mot de passe requis."); }
